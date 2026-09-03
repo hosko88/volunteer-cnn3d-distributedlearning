@@ -1,0 +1,9 @@
+flask>=3.0
+numpy>=1.26
+requests>=2.31
+matplotlib>=3.7
+psutil>=5.9
+torch>=2.0
+torchvision>=0.15
+tqdm>=4.66
+h5py>=3.8

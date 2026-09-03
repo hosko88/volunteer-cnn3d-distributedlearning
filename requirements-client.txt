@@ -1,0 +1,16 @@
+# Volontaire (PC Windows / Linux, piste "heavy" PyTorch pour les phases 1/2/3)
+#
+# torchvision et h5py NE SONT PAS necessaires ici : le serveur est seul a
+# posseder CIFAR-10 / ModelNet40 (voir jobs/progressive/data_providers.py,
+# imports differes dans get_cifar10()/_load_modelnet_points()). Le volontaire
+# recoit uniquement des mini-batches deja decoupes (task["batch_payload"]) et
+# n'appelle jamais ces fonctions. Ne pas rajouter ces deux paquets ici sans
+# revoir compute_gradient() dans jobs/progressive/phase_jobs.py.
+numpy>=1.26
+requests>=2.31
+# CPU wheel recommandee (beaucoup plus legere que le paquet par defaut avec CUDA) :
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch>=2.0
+
+# Piste "light" (smartphone Termux/Pydroid, ou PC sans torch) :
+# numpy + requests suffisent, voir jobs/cnn_3d/attention_job.py

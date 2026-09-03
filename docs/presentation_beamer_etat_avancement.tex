@@ -1,0 +1,129 @@
+\documentclass[11pt]{beamer}
+\usetheme{Madrid}
+\usecolortheme{default}
+\setbeamertemplate{navigation symbols}{}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{listings}
+
+\title{État d'avancement des travaux}
+\subtitle{Calcul volontaire, apprentissage distribué et CNN 3D}
+\author{[Votre nom]}
+\date{05 août 2026}
+
+\begin{document}
+
+\begin{frame}
+  \titlepage
+\end{frame}
+
+\begin{frame}{Contexte du mémoire}
+  \begin{block}{Question de recherche}
+    Comment exploiter des machines hétérogènes et volontairement disponibles pour entraîner un modèle d'apprentissage profond, sans recourir à un cluster coûteux ?
+  \end{block}
+  \vspace{0.4cm}
+  \begin{itemize}
+    \\item architecture inspirée du calcul volontaire et du paradigme BOINC ;
+    \\item apprentissage distribué avec agrégation locale de type FedAvg ;
+    \\item progression progressive vers une logique 3D, puis volumétrique.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{État de l'art récent (2023--2026)}
+  \begin{itemize}
+    \\item \textbf{Apprentissage fédéré} : travaux récents sur l'hétérogénéité des clients, la communication efficace et l'agrégation robuste.
+    \\item \textbf{CNN 3D / volumes} : méthodes récentes sur les réseaux convolutifs 3D, l'attention et le traitement spatio-temporel.
+    \\item \textbf{Edge / calcul volontaire} : travaux sur l'utilisation de ressources hétérogènes et l'optimisation des modèles sur machines modestes.
+  \end{itemize}
+  \vspace{0.4cm}
+  \begin{alertblock}{Interprétation pour le mémoire}
+    Les articles récents justifient l'idée d'un système distribué robuste à l'hétérogénéité, avec agrégation centrale et faible coût de coordination.
+  \end{alertblock}
+\end{frame}
+
+\begin{frame}{Système mis en place}
+  \begin{figure}
+    \centering
+    \includegraphics[width=0.95\textwidth]{example-image}
+  \end{figure}
+  \vspace{-0.3cm}
+  \begin{itemize}
+    \\item \textbf{Serveur de coordination} : orchestration des tâches, gestion de l'état global, agrégation, tableau de bord.
+    \\item \textbf{Volontaires} : machines hétérogènes qui exécutent localement des sous-tâches.
+    \\item \textbf{Framework générique} : scheduler, work generator, parameter server, compression, tolérance aux pannes.
+    \\item \textbf{Job principal} : CNN 3D avec mécanisme d'attention spatiale-temporelle.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Architecture globale}
+  \begin{center}
+    \begin{tabular}{c c c}
+      \toprule
+      \textbf{Serveur} & & \textbf{Volontaires} \\
+      \midrule
+      paramètres globaux $\theta$ & $\longrightarrow$ & téléchargement local \\
+      orchestration BOINC-like & & exécution locale \\
+      agrégation de type FedAvg & $\longleftarrow$ & renvoi des poids locaux \\
+      tableau de bord temps réel & & tolérance aux pannes \\
+      \bottomrule
+    \end{tabular}
+  \end{center}
+\end{frame}
+
+\begin{frame}{Progression expérimentale du projet}
+  \begin{enumerate}
+    \\item \textbf{Phase 1 -- CIFAR-10 / CNN 2D} : validation du paradigme de calcul distribué.
+    \\item \textbf{Phase 2 -- ModelNet40 / CNN 3D statique} : transition vers un traitement volumétrique 3D.
+    \\item \textbf{Phase 3 -- ShapeNet / CNN 3D spatio-temporel + attention} : cœur actuel du démonstrateur.
+  \end{enumerate}
+  \vspace{0.3cm}
+  \begin{block}{Pourquoi cette progression ?}
+    Elle permet d'aller du cadre le plus simple vers un cas plus proche des applications volumétriques modernes.
+  \end{block}
+\end{frame}
+
+\begin{frame}{Ce qui a été mis en place}
+  \begin{itemize}
+    \\item un serveur de coordination cohérent avec un cycle de mise à jour et d'agrégation ;
+    \\item un job principal orienté CNN 3D avec attention ;
+    \\item un support de suivi multi-phases côté backend ;
+    \\item une logique de démonstration compatible avec le thème du mémoire.
+  \end{itemize}
+  \vspace{0.3cm}
+  \begin{exampleblock}{Point fort}
+    Le projet ne repose pas sur un supercalculateur. Il montre plutôt une preuve de faisabilité sur des ressources hétérogènes et modestes.
+  \end{exampleblock}
+\end{frame}
+
+\begin{frame}{Résultats déjà observés}
+  \begin{itemize}
+    \\item stabilisation du cœur de démonstration autour du job CNN 3D ;
+    \\item cohérence de l'architecture de coordination ;
+    \\item alignement du scénario autour d'une progression 2D $\rightarrow$ 3D ;
+    \\item préparation d'un support de présentation oral adapté à l'encadrant.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Prochaines étapes}
+  \begin{itemize}
+    \\item finaliser la documentation et le cadrage bibliographique ;
+    \\item renforcer la preuve de cohérence sur la présentation finale ;
+    \\item préparer la version orale avec une synthèse claire des contributions et des limites.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Conclusion}
+  \begin{block}{Synthèse}
+    Le mémoire présente un prototype de calcul volontaire pour l'apprentissage distribué, avec un passage progressif de la 2D vers la 3D et une logique d'agrégation fédérée.
+  \end{block}
+  \vspace{0.5cm}
+  \begin{center}
+    \textbf{Merci.}
+  \end{center}
+\end{frame}
+
+\end{document}

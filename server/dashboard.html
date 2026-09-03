@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Volunteer Computing for Distributed Learning - Dashboard</title>
+<style>
+  :root{
+    --bg:#0b0f14; --panel:#121922; --panel2:#0e141b; --line:#1e2a36;
+    --ink:#d7e3ee; --dim:#7f93a6; --accent:#37e6a4; --accent2:#4aa8ff;
+    --warn:#ffb454; --bad:#ff6b6b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font-family:ui-monospace,"Cascadia Code","SF Mono",Menlo,Consolas,monospace;}
+  header{padding:16px 22px;border-bottom:1px solid var(--line);
+         display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
+  h1{font-size:15px;margin:0;letter-spacing:.08em;text-transform:uppercase;color:var(--ink)}
+  .sub{color:var(--dim);font-size:12px;margin-top:3px}
+  .pill{padding:4px 10px;border-radius:20px;font-size:12px;border:1px solid var(--line)}
+  .run{color:var(--accent);border-color:var(--accent)}
+  .done{color:var(--accent2);border-color:var(--accent2)}
+  .wrap{padding:18px 22px;max-width:1200px;margin:0 auto}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+  .card .k{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+  .card .v{font-size:26px;margin-top:6px;color:var(--ink)}
+  .card .v small{font-size:13px;color:var(--dim)}
+  .row{display:grid;grid-template-columns:2fr 1fr;gap:16px}
+  @media(max-width:840px){.row{grid-template-columns:1fr}}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:16px}
+  .panel h2{font-size:12px;margin:0 0 12px;color:var(--dim);text-transform:uppercase;letter-spacing:.07em}
+  canvas{width:100%;height:240px}
+  .bar{height:10px;background:var(--panel2);border-radius:6px;overflow:hidden;border:1px solid var(--line)}
+  .bar>i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));width:0}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line)}
+  th{color:var(--dim);font-weight:normal;font-size:11px;text-transform:uppercase}
+  .dev{display:flex;align-items:center;gap:8px}
+  .ico{width:9px;height:9px;border-radius:50%}
+  .os-android{background:var(--accent)} .os-linux{background:var(--warn)}
+  .os-windows{background:var(--accent2)} .os-other{background:var(--dim)}
+  .muted{color:var(--dim)}
+  .net{display:flex;justify-content:space-between;font-size:13px;padding:5px 0;border-bottom:1px solid var(--line)}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Using Volunteer Computing for Distributed Learning with CNNs: A Progressive Approach Toward 3D Imaging</h1>
+    <div class="sub" id="jobname">&mdash;</div>
+    <div class="sub" id="nparams">&mdash;</div>
+  </div>
+  <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+  <button id="btnStart"
+          style="
+            background:var(--accent2);
+            color:white;
+            border:0;
+            border-radius:8px;
+            padding:8px 16px;
+            font-weight:bold;
+            cursor:pointer;
+            font-family:inherit;">
+    ▶ DÉMARRER
+  </button>
+
+  <div class="pill run" id="state">en attente</div>
+</div>
+</header>
+
+<div class="wrap">
+  <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:16px">
+    <label for="phaseSelector" class="muted" style="font-size:12px;text-transform:uppercase;letter-spacing:.07em">Phase de recherche</label>
+    <select id="phaseSelector" style="background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-family:inherit">
+      <option value="Phase 1 - CIFAR-10">Phase 1 — CIFAR-10</option>
+      <option value="Phase 2 - ModelNet40">Phase 2 — ModelNet40</option>
+      <option value="Phase 3 - ShapeNet">Phase 3 — ShapeNet</option>
+    </select>
+    <button id="btnExportJson" style="background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px 10px;cursor:pointer;font-family:inherit">Exporter JSON</button>
+    <button id="btnExportCsv" style="background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px 10px;cursor:pointer;font-family:inherit">Exporter CSV</button>
+  </div>
+  <div class="grid">
+    <div class="card"><div class="k">Epoque</div><div class="v" id="epoch">0<small id="maxep"></small></div></div>
+    <div class="card"><div class="k">Precision</div><div class="v" id="acc">&mdash;</div></div>
+    <div class="card"><div class="k">Top-3</div><div class="v" id="top3">&mdash;</div></div>
+    <div class="card"><div class="k">F1 macro</div><div class="v" id="f1">&mdash;</div></div>
+    <div class="card"><div class="k">Tâches en attente</div><div class="v" id="tasks_pending">&mdash;</div></div>
+    <div class="card"><div class="k">Tâches en cours</div><div class="v" id="tasks_inflight">&mdash;</div></div>
+    <div class="card"><div class="k">Sous-tâches rendues/epoch</div><div class="v" id="tasks_done">&mdash;</div></div>
+    <div class="card"><div class="k">Gradients appliqués total</div><div class="v" id="grads_total">&mdash;</div></div>
+    <div class="card"><div class="k">Volontaires actifs</div><div class="v" id="workers_count">&mdash;</div></div>
+    <div class="card"><div class="k">Temps CPU cumulé</div><div class="v" id="cpu_total">&mdash;</div></div>
+    <div class="card"><div class="k">Speedup interne</div><div class="v" id="speedup">&mdash;</div></div>
+    <div class="card"><div class="k">Efficacité</div><div class="v" id="efficiency">&mdash;</div></div>
+    <div class="card"><div class="k">Débit gradients/s</div><div class="v" id="throughput">&mdash;</div></div>
+    <div class="card"><div class="k">Temps communication</div><div class="v" id="comm_total">&mdash;</div></div>
+    <div class="card"><div class="k">POST /request_work</div><div class="v" id="comm_request">&mdash;</div></div>
+    <div class="card"><div class="k">POST /report</div><div class="v" id="comm_report">&mdash;</div></div>
+    <div class="card"><div class="k">Comm. moyenne / lot</div><div class="v" id="comm_avg">&mdash;</div></div>
+  </div>
+  
+  
+
+  <div class="panel">
+    <h2>Progression de l'epoque courante</h2>
+    <div class="bar"><i id="prog"></i></div>
+    <div class="sub" id="progtxt" style="margin-top:8px">&mdash;</div>
+  </div>
+
+  <div class="panel" id="light_panel" style="display:none">
+    <h2>Piste legere (NumPy) &mdash; smartphones / appareils sans PyTorch</h2>
+    <div class="cards">
+      <div class="card"><div class="k">Algorithme</div><div class="v" id="light_jobname" style="font-size:14px">&mdash;</div></div>
+      <div class="card"><div class="k">Epoque</div><div class="v" id="light_epoch">&mdash;</div></div>
+      <div class="card"><div class="k">Precision</div><div class="v" id="light_acc">&mdash;</div></div>
+      <div class="card"><div class="k">Volontaires actifs</div><div class="v" id="light_workers">&mdash;</div></div>
+      <div class="card"><div class="k">Debit gradients/s</div><div class="v" id="light_throughput">&mdash;</div></div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="panel">
+      <h2>Convergence (precision par epoque)</h2>
+      <canvas id="chart"></canvas>
+    </div>
+    <div class="panel">
+      <h2>Scalabilite</h2>
+      <canvas id="scaleChart"></canvas>
+      <div class="sub muted" style="margin-top:6px">Le graphique relie la precision finale (ou le temps par époque) au nombre de volontaires actifs, pour montrer si le gain se renforce de façon cohérente avec l'hétérogénéité du pool.</div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="panel">
+      <h2>Transport par gradients</h2>
+      <div class="net"><span class="muted">Compresse transmis</span><span id="bw_comp">&mdash;</span></div>
+      <div class="net"><span class="muted">Equivalent brut fp32</span><span id="bw_raw">&mdash;</span></div>
+      <div class="net"><span class="muted">Reduction</span><span id="bw_red" style="color:var(--accent)">&mdash;</span></div>
+      <div class="net"><span class="muted">Gradients appliques</span><span id="g_ok">&mdash;</span></div>
+      <div class="net"><span class="muted">Gradients perimes rejetes</span><span id="g_drop">&mdash;</span></div>
+      <div class="net"><span class="muted">Gradients rejetes pour anomalie</span><span id="g_anomaly">&mdash;</span></div>
+      <div class="net"><span class="muted">Taux de rejet gradients</span><span id="drop_rate">&mdash;</span></div>
+      <div class="net"><span class="muted">Reattributions (pannes)</span><span id="reassign">&mdash;</span></div>
+      <div class="net"><span class="muted">Temps ecoule</span><span id="elapsed">&mdash;</span></div>
+    </div>
+    <div class="panel">
+      <h2>Comparatif multi-phases</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Phase</th>
+            <th>Precision finale</th>
+            <th>Speedup</th>
+            <th>Efficacite</th>
+            <th>Rejet grads</th>
+            <th>Gradients/s</th>
+          </tr>
+        </thead>
+        <tbody id="phaseTable"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Volontaires connectes</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Appareil</th>
+          <th>OS</th>
+          <th>CPU</th>
+          <th>RAM</th>
+          <th>Lots rendus</th>
+          <th>Temps moyen</th>
+          <th>Comm. moyenne</th>
+          <th>Temps total moyen</th>
+          <th>Fiabilité</th>
+          <th>Benchmark</th>
+          <th>Temps de calcul</th>
+          <th>Score vitesse</th>
+        </tr>
+      </thead>
+      <tbody id="clients"><tr><td colspan="12" class="muted">en attente de volontaires&hellip;</td></tr></tbody>
+    </table>
+  </div>
+  <div class="panel">
+    <h2>Journal temps réel</h2>
+    <div id="live_log" style="max-height:260px;overflow:auto;font-size:12px;line-height:1.5;background:#080c11;border:1px solid var(--line);border-radius:8px;padding:10px">
+      <div class="muted">En attente des événements...</div>
+    </div>
+  </div>
+  <div class="sub muted">Cible de precision : <span id="target">&mdash;</span> &middot; actualisation automatique</div>
+</div>
+
+<script>
+let lastGradients = 0;
+const hist = [];
+function fmtBytes(b){ if(b>1e6) return (b/1e6).toFixed(1)+' Mo'; if(b>1e3) return (b/1e3).toFixed(1)+' Ko'; return b+' o'; }
+function osClass(os){ return 'os-'+(['android','linux','windows'].includes(os)?os:'other'); }
+
+function drawChart(){
+  const c=document.getElementById('chart'), dpr=window.devicePixelRatio||1;
+  const W=c.clientWidth, H=c.clientHeight; c.width=W*dpr; c.height=H*dpr;
+  const x=c.getContext('2d'); x.scale(dpr,dpr); x.clearRect(0,0,W,H);
+  const pad=34, w=W-pad*1.5, h=H-pad*1.4;
+  // grille
+  x.strokeStyle='#1e2a36'; x.fillStyle='#7f93a6'; x.font='10px monospace'; x.lineWidth=1;
+  for(let i=0;i<=5;i++){ const yy=pad/2+h*i/5; x.beginPath(); x.moveTo(pad,yy); x.lineTo(pad+w,yy); x.stroke();
+    x.fillText((1-i/5).toFixed(1), 6, yy+3); }
+  if(hist.length<1) return;
+  const n=Math.max(hist.length-1,1);
+  const px=i=> pad + w*i/n;
+  const py=v=> pad/2 + h*(1-v);
+  // ligne cible
+  const tgt=parseFloat(document.getElementById('target').dataset.v||'0.9');
+  x.strokeStyle='#33485b'; x.setLineDash([4,4]); x.beginPath(); x.moveTo(pad,py(tgt)); x.lineTo(pad+w,py(tgt)); x.stroke(); x.setLineDash([]);
+  // courbe precision
+  x.strokeStyle='#37e6a4'; x.lineWidth=2; x.beginPath();
+  hist.forEach((p,i)=>{ const X=px(i),Y=py(p.accuracy); i?x.lineTo(X,Y):x.moveTo(X,Y); }); x.stroke();
+  x.fillStyle='#37e6a4';
+  hist.forEach((p,i)=>{ x.beginPath(); x.arc(px(i),py(p.accuracy),2.5,0,7); x.fill(); });
+}
+
+async function tick(){
+  let s; try{ s=await (await fetch('/status')).json(); }catch(e){ return; }
+  window.__lastStatus = s;
+  document.getElementById('jobname').textContent = s.job;
+  document.getElementById('nparams').textContent =
+      s.n_params ? s.n_params.toLocaleString('fr-FR') + ' parametres' : '';
+  document.getElementById('epoch').firstChild.nodeValue = s.epoch;
+  document.getElementById('maxep').textContent = ' / '+s.max_epochs;
+  const pct=v=> v==null?'&mdash;':(v*100).toFixed(1)+'<small>%</small>';
+  document.getElementById('acc').innerHTML  = pct(s.last_accuracy);
+  document.getElementById('top3').innerHTML = pct(s.last_top3);
+  document.getElementById('f1').innerHTML   = s.last_f1==null?'&mdash;':s.last_f1.toFixed(3);
+  const tEl=document.getElementById('target'); tEl.textContent=(s.target_accuracy*100)+'%'; tEl.dataset.v=s.target_accuracy;
+
+  const lp = s.light_track;
+  const lightPanel = document.getElementById('light_panel');
+  if (lp) {
+    lightPanel.style.display = '';
+    document.getElementById('light_jobname').textContent = lp.job;
+    document.getElementById('light_epoch').textContent = lp.epoch + ' / ' + lp.max_epochs;
+    document.getElementById('light_acc').innerHTML = pct(lp.last_accuracy);
+    document.getElementById('light_workers').textContent =
+        (lp.scheduler && lp.scheduler.active_workers) || 0;
+    document.getElementById('light_throughput').textContent =
+        (lp.distributed_metrics && lp.distributed_metrics.throughput_gradients_per_second) || '0';
+  } else {
+    lightPanel.style.display = 'none';
+  }
+
+
+  const pr=s.progress, frac=pr.total?pr.done/pr.total:0;
+  document.getElementById('prog').style.width=(frac*100)+'%';
+  document.getElementById('progtxt').textContent = pr.done+' / '+pr.total+' sous-taches rendues';
+
+  const bw=s.bandwidth||{};
+  document.getElementById('bw_comp').textContent = fmtBytes(bw.octets_total_compresse||0);
+  document.getElementById('bw_raw').textContent  = fmtBytes(bw.octets_equivalent_brut_fp32||0);
+  document.getElementById('bw_red').textContent  = 'x'+(bw.facteur_reduction||0).toFixed(1);
+  document.getElementById('g_ok').textContent    = bw.gradients_appliques||0;
+  document.getElementById('grads_total').textContent = bw.gradients_appliques || 0;
+  document.getElementById('g_drop').textContent  = bw.gradients_perimes_rejetes||0;
+  document.getElementById('g_anomaly').textContent = bw.gradients_anomalies_rejetes||0;
+  const applied = bw.gradients_appliques || 0;
+  const dropped = bw.gradients_perimes_rejetes || 0;
+  const anomalies = bw.gradients_anomalies_rejetes || 0;
+  const dropRate = (applied + dropped + anomalies) > 0 ? (dropped + anomalies) / (applied + dropped + anomalies) : 0;
+  document.getElementById('drop_rate').textContent = (dropRate * 100).toFixed(2) + '%';
+  document.getElementById('reassign').textContent= (s.scheduler||{}).reassigned||0;
+  document.getElementById('elapsed').textContent = (s.elapsed||0).toFixed(0)+' s';
+  
+  const logBox = document.getElementById('live_log');
+  const events = s.events || [];
+
+  if(events.length){
+    logBox.innerHTML = events.slice().reverse().map(ev => {
+      return `<div>[${ev.time}] ${ev.message}</div>`;
+    }).join('');
+  }
+
+  const sched = s.scheduler || {};
+  const taskStats = sched.tasks || {};
+  document.getElementById('tasks_pending').textContent = taskStats.pending ?? 0;
+  document.getElementById('tasks_inflight').textContent = taskStats.inflight ?? 0;
+  document.getElementById('tasks_done').textContent = taskStats.done ?? 0;
+  document.getElementById('workers_count').textContent = Object.keys(sched.clients || {}).length;
+  const totalComm = sched.total_communication_seconds || 0;
+  const totalReq = sched.total_request_seconds || 0;
+  const totalRep = sched.total_report_seconds || 0;
+  //const doneTasks = (sched.tasks || {}).done || 0;
+
+  document.getElementById('comm_total').textContent = totalComm.toFixed(2) + ' s';
+  document.getElementById('comm_request').textContent = totalReq.toFixed(2) + ' s';
+  document.getElementById('comm_report').textContent = totalRep.toFixed(2) + ' s';
+  document.getElementById('comm_avg').textContent =
+    sched.avg_communication_per_task
+      ? sched.avg_communication_per_task.toFixed(4) + ' s'
+      : '—';
+
+  const dm = s.distributed_metrics || {};
+
+  document.getElementById('cpu_total').textContent =
+    dm.total_compute_seconds == null ? '—' : dm.total_compute_seconds.toFixed(0) + ' s';
+
+  document.getElementById('speedup').textContent =
+    dm.speedup == null ? '—' : 'x' + dm.speedup.toFixed(2);
+
+  document.getElementById('efficiency').textContent =
+    dm.efficiency == null ? '—' : (dm.efficiency * 100).toFixed(1) + '%';
+
+  document.getElementById('throughput').textContent =
+    dm.throughput_gradients_per_second == null ? '—' : dm.throughput_gradients_per_second.toFixed(2);
+
+  const st=document.getElementById('state');
+
+  if(s.finished){
+    st.textContent='termine';
+    st.className='pill done';
+
+    btnStart.textContent = 'Terminé';
+    btnStart.disabled = true;
+    btnStart.style.background = 'var(--dim)';
+  }
+
+  // clients
+  const cs=(s.scheduler||{}).clients||{};
+  const tb=document.getElementById('clients');
+  const keys=Object.keys(cs);
+
+  if(keys.length){
+    tb.innerHTML = keys.map(k=>{
+      const c=cs[k];
+      const os=(c.info.os||'other');
+      const ram = c.info.ram_gb == null ? '&mdash;' : c.info.ram_gb + ' Go';
+
+      return `<tr>
+        <td><div class="dev"><span class="ico ${osClass(os)}"></span>${c.info.device}</div></td>
+        <td class="muted">${os}</td>
+        <td>${c.info.cpu || '&mdash;'}</td>
+        <td>${ram}</td>
+        <td>${c.completed}</td>
+        <td>${c.avg_task_seconds ? c.avg_task_seconds.toFixed(2)+' s' : '&mdash;'}</td>
+        <td>${c.avg_communication_seconds ? c.avg_communication_seconds.toFixed(4)+' s' : '&mdash;'}</td>
+        <td>${c.avg_total_task_seconds ? c.avg_total_task_seconds.toFixed(4)+' s' : '&mdash;'}</td>
+        <td>${(c.reliability*100).toFixed(0)}%</td>
+        <td>${c.dynamic_power ?? '&mdash;'}</td>
+        <td>${c.total_compute_seconds.toFixed(1)} s</td>
+        <td>${c.speed_score ? c.speed_score.toFixed(2) : '&mdash;'}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  // historique pour la courbe
+  if(s.history){ hist.length=0; s.history.forEach(h=>hist.push(h)); drawChart(); }
+  if(s.phase_history){ window.__phaseHistory = s.phase_history; }
+  drawScaleChart();
+  renderPhaseTable();
+}
+
+const PHASE_STORAGE_KEY = 'volunteer_rl_phase_history';
+const PHASE_PHASES = ['Phase 1 - CIFAR-10', 'Phase 2 - ModelNet40', 'Phase 3 - ShapeNet'];
+const phaseSelector = document.getElementById('phaseSelector');
+const btnStart = document.getElementById('btnStart');
+
+function loadPhaseHistory(){
+  return window.__phaseHistory || {};
+}
+
+function persistPhaseSnapshot(s){
+  if(!s || !s.phase_history){ return; }
+  window.__phaseHistory = s.phase_history || {};
+  renderPhaseTable();
+}
+
+function renderPhaseTable(){
+  const history = loadPhaseHistory();
+  const rows = PHASE_PHASES.map(phase => {
+    const runs = history[phase] || [];
+    const last = runs[runs.length - 1] || {};
+    return `<tr>
+      <td>${phase}</td>
+      <td>${last.final_accuracy == null ? '&mdash;' : (last.final_accuracy * 100).toFixed(1)+'%'}</td>
+      <td>${last.speedup == null ? '&mdash;' : 'x'+last.speedup.toFixed(2)}</td>
+      <td>${last.efficiency == null ? '&mdash;' : (last.efficiency * 100).toFixed(1)+'%'}</td>
+      <td>${last.rejection_rate == null ? '&mdash;' : (last.rejection_rate * 100).toFixed(2)+'%'}</td>
+      <td>${last.throughput_gradients_per_second == null ? '&mdash;' : last.throughput_gradients_per_second.toFixed(2)}</td>
+    </tr>`;
+  }).join('');
+  document.getElementById('phaseTable').innerHTML = rows;
+}
+
+function drawScaleChart(){
+  const c=document.getElementById('scaleChart'), dpr=window.devicePixelRatio||1;
+  const W=c.clientWidth, H=c.clientHeight; c.width=W*dpr; c.height=H*dpr;
+  const x=c.getContext('2d'); x.scale(dpr,dpr); x.clearRect(0,0,W,H);
+  const pad=34, w=W-pad*1.5, h=H-pad*1.4;
+  x.strokeStyle='#1e2a36'; x.fillStyle='#7f93a6'; x.font='10px monospace'; x.lineWidth=1;
+  const history = window.__phaseHistory ? Object.values(window.__phaseHistory).flat() : [];
+  if(history.length < 2) return;
+  const workers = history.map(h => h.active_workers || 0);
+  const accs = history.map(h => h.final_accuracy || 0);
+  const maxW = Math.max(...workers, 1);
+  const yMin = Math.min(...accs, 0);
+  const yMax = Math.max(...accs, 1);
+  const px=i => pad + w * (workers[i] / maxW);
+  const py=v => pad/2 + h * (1 - (v - yMin) / Math.max(1e-6, yMax - yMin));
+  for(let i=0;i<=4;i++){ const yy=pad/2+h*i/4; x.beginPath(); x.moveTo(pad,yy); x.lineTo(pad+w,yy); x.stroke(); }
+  x.strokeStyle='#4aa8ff'; x.lineWidth=2; x.beginPath();
+  history.forEach((p,i)=>{ const X=px(i), Y=py(p.final_accuracy || 0); i?x.lineTo(X,Y):x.moveTo(X,Y); });
+  x.stroke();
+  x.fillStyle='#37e6a4'; history.forEach((p,i)=>{ const X=px(i), Y=py(p.final_accuracy || 0); x.beginPath(); x.arc(X,Y,2.5,0,7); x.fill(); });
+}
+
+function exportCurrentSession(format){
+  const status = window.__lastStatus || {};
+  const payload = {
+    phase: phaseSelector.value,
+    exported_at: new Date().toISOString(),
+    status,
+    phase_history: loadPhaseHistory(),
+  };
+  const blob = format === 'json'
+    ? new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+    : new Blob([toCsv(payload)], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `session_${format === 'json' ? 'metrics.json' : 'metrics.csv'}`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function toCsv(payload){
+  const rows = [];
+  rows.push(['phase', 'final_accuracy', 'speedup', 'efficiency', 'rejection_rate', 'throughput']);
+  const history = payload.phase_history[payload.phase] || [];
+  (history.length ? history : [payload.status]).forEach((row) => {
+    rows.push([
+      payload.phase,
+      row.final_accuracy ?? '',
+      row.speedup ?? '',
+      row.efficiency ?? '',
+      row.rejection_rate ?? '',
+      row.throughput ?? ''
+    ]);
+  });
+  return rows.map(r => r.join(',')).join('\n');
+}
+
+const btnExportJson = document.getElementById('btnExportJson');
+const btnExportCsv = document.getElementById('btnExportCsv');
+btnExportJson.addEventListener('click', () => exportCurrentSession('json'));
+btnExportCsv.addEventListener('click', () => exportCurrentSession('csv'));
+
+btnStart.addEventListener('click', async () => {
+  try {
+    const r = await fetch('/start_training', { method: 'POST' });
+    const data = await r.json();
+
+    if (data.started) {
+      btnStart.textContent = 'Calcul lancé';
+      btnStart.disabled = true;
+      btnStart.style.background = 'var(--accent)';
+      btnStart.style.cursor = 'not-allowed';
+
+      const st = document.getElementById('state');
+      st.textContent = 'en cours';
+      st.className = 'pill run';
+    }
+  } catch (e) {
+    alert("Impossible de démarrer l'entraînement. Vérifie que le serveur est lancé.");
+  }
+});
+
+setInterval(tick, 1000); tick();
+window.addEventListener('resize', () => { drawChart(); drawScaleChart(); });
+</script>
+
+<footer style="
+margin-top:30px;
+padding:15px;
+text-align:center;
+font-size:13px;
+color:#888;
+border-top:1px solid #333;">
+    <strong>VolunteerRL Framework</strong><br>
+    Developed by <strong>Ngono Ndjana Clement</strong><br>
+    Departement d'informatique, University of Yaoundé I
+</footer>
+</body>
+</html>
