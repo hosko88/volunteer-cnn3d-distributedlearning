@@ -36,11 +36,23 @@ VOXEL_CACHE = DATA_ROOT / "modelnet40_voxels32"
 def get_cifar10(train: bool = True):
     from torchvision import datasets, transforms
 
-    tfm = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465),
-                             (0.2470, 0.2435, 0.2616)),
-    ])
+    if train:
+        # Augmentation standard CIFAR-10 : ameliore fortement la generalisation
+        # d'un petit CNN entraine from scratch (rognage aleatoire + flip).
+        tfm = transforms.Compose([
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize((0.4914, 0.4822, 0.4465),
+                                 (0.2470, 0.2435, 0.2616)),
+        ])
+    else:
+        # Jamais d'augmentation sur le jeu de test (evaluation deterministe).
+        tfm = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.4914, 0.4822, 0.4465),
+                                 (0.2470, 0.2435, 0.2616)),
+        ])
     return datasets.CIFAR10(
         root=str(DATA_ROOT / "cifar10"),
         train=train,

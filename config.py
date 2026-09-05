@@ -38,14 +38,14 @@ class TransportConfig:
 
 @dataclass
 class TrainConfig:
-    n_tasks_per_epoch: int = 64
+    n_tasks_per_epoch: int = 256
     batch_size: int = 32
     local_steps: int = 1            # accumulation locale (1 = classique)
-    max_epochs: int = 80
+    max_epochs: int = 250
     target_accuracy: float = 0.75
     completion_fraction: float = 0.75
     task_timeout: float = 180.0
-    staleness_max: int = 20
+    staleness_max: int = 40
     n_shards: int = 20               # DEPRECATED : plus utilisé.
                                      # Le serveur envoie désormais uniquement
                                      # les mini-batches nécessaires dans chaque tâche.

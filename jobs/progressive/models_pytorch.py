@@ -24,23 +24,23 @@ class CNN2D(nn.Module):
         super().__init__()
         self.features = nn.Sequential(
             nn.Conv2d(3, 64, 3, padding=1),
-            nn.BatchNorm2d(64),
+            nn.GroupNorm(8, 64),
             nn.ReLU(inplace=True),
             nn.Conv2d(64, 64, 3, padding=1),
-            nn.BatchNorm2d(64),
+            nn.GroupNorm(8, 64),
             nn.ReLU(inplace=True),
             nn.MaxPool2d(2),
 
             nn.Conv2d(64, 128, 3, padding=1),
-            nn.BatchNorm2d(128),
+            nn.GroupNorm(8, 128),
             nn.ReLU(inplace=True),
             nn.Conv2d(128, 128, 3, padding=1),
-            nn.BatchNorm2d(128),
+            nn.GroupNorm(8, 128),
             nn.ReLU(inplace=True),
             nn.MaxPool2d(2),
 
             nn.Conv2d(128, 256, 3, padding=1),
-            nn.BatchNorm2d(256),
+            nn.GroupNorm(8, 256),
             nn.ReLU(inplace=True),
             nn.MaxPool2d(2),
         )
@@ -68,22 +68,22 @@ class CNN3D(nn.Module):
         super().__init__()
         self.features = nn.Sequential(
             nn.Conv3d(in_channels, 32, 3, padding=1),
-            nn.BatchNorm3d(32),
+            nn.GroupNorm(8, 32),
             nn.ReLU(inplace=True),
             nn.MaxPool3d(2),
 
             nn.Conv3d(32, 64, 3, padding=1),
-            nn.BatchNorm3d(64),
+            nn.GroupNorm(8, 64),
             nn.ReLU(inplace=True),
             nn.MaxPool3d(2),
 
             nn.Conv3d(64, 128, 3, padding=1),
-            nn.BatchNorm3d(128),
+            nn.GroupNorm(8, 128),
             nn.ReLU(inplace=True),
             nn.MaxPool3d(2),
 
             nn.Conv3d(128, 256, 3, padding=1),
-            nn.BatchNorm3d(256),
+            nn.GroupNorm(8, 256),
             nn.ReLU(inplace=True),
             nn.AdaptiveAvgPool3d(1),
         )
@@ -125,7 +125,7 @@ class CNN3DAttention(nn.Module):
         super().__init__()
         self.layer1 = nn.Sequential(
             nn.Conv3d(in_channels, 32, 3, padding=1),
-            nn.BatchNorm3d(32),
+            nn.GroupNorm(8, 32),
             nn.ReLU(inplace=True),
             nn.MaxPool3d(2),
         )
@@ -133,7 +133,7 @@ class CNN3DAttention(nn.Module):
 
         self.layer2 = nn.Sequential(
             nn.Conv3d(32, 64, 3, padding=1),
-            nn.BatchNorm3d(64),
+            nn.GroupNorm(8, 64),
             nn.ReLU(inplace=True),
             nn.MaxPool3d(2),
         )
@@ -141,7 +141,7 @@ class CNN3DAttention(nn.Module):
 
         self.layer3 = nn.Sequential(
             nn.Conv3d(64, 128, 3, padding=1),
-            nn.BatchNorm3d(128),
+            nn.GroupNorm(8, 128),
             nn.ReLU(inplace=True),
             nn.MaxPool3d(2),
         )
@@ -149,7 +149,7 @@ class CNN3DAttention(nn.Module):
 
         self.layer4 = nn.Sequential(
             nn.Conv3d(128, 256, 3, padding=1),
-            nn.BatchNorm3d(256),
+            nn.GroupNorm(8, 256),
             nn.ReLU(inplace=True),
             nn.AdaptiveAvgPool3d(1),
         )

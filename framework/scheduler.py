@@ -127,12 +127,12 @@ class Scheduler:
                 # plus avg_task_time est faible, plus la machine est rapide.
                 ratio = fastest / c.avg_task_time
 
-                # Le plus rapide peut recevoir jusqu'à 8 tâches.
-                n = round(8 * ratio)
-                n = max(1, min(8, n))
+                # Le plus rapide peut recevoir jusqu'a 32 taches (lots plus # gros pour reduire le nombre d'allers-retours reseau)
+                n = round(32 * ratio)
+                n = max(1, min(32, n))
             else:
                 # Phase de démarrage : benchmark initial
-                n = max(1, min(8, int(c.power)))
+                n = max(1, min(32, int(c.power)))
 
             c.dynamic_power = n
             c.power = n
