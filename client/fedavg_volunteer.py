@@ -19,9 +19,29 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from jobs.progressive.models_pytorch import CNN2D, params_to_vector, vector_to_params
-from jobs.progressive.data_providers import CIFAR10Provider
+from jobs.progressive.models_pytorch import (
+    CNN2D, CNN3D, CNN3DAttention, params_to_vector, vector_to_params,
+)
+from jobs.progressive.data_providers import CIFAR10Provider, ModelNet40Provider
 from framework.compression import encode_vector, decode_vector
+
+
+def build_model(phase: int, n_classes: int):
+    if phase == 1:
+        return CNN2D(n_classes=n_classes)
+    if phase == 2:
+        return CNN3D(n_classes=n_classes, in_channels=1)
+    if phase == 3:
+        return CNN3DAttention(n_classes=n_classes, in_channels=1)
+    raise ValueError(f"Phase inconnue : {phase}")
+
+
+def build_provider(phase: int):
+    if phase == 1:
+        return CIFAR10Provider()
+    if phase in (2, 3):
+        return ModelNet40Provider()
+    raise ValueError(f"Phase inconnue : {phase}")
 
 
 def local_train(model, x_shard, y_shard, n_local_epochs, batch_size, lr, device):
@@ -57,13 +77,18 @@ def main():
 
     cfg = requests.get(f"{args.server}/fedavg/config", timeout=30).json()
     print(f"Config recue : {cfg}")
+    phase = cfg["phase"]
+    n_classes = cfg["n_classes"]
+    if phase in (2, 3):
+        print("Phase 2/3 (ModelNet40) : le premier chargement peut prendre du temps "
+              "si le cache voxels n'existe pas encore localement sur ce PC.")
 
-    provider = CIFAR10Provider()
+    provider = build_provider(phase)
     shard_id_cached = None
     x_shard = y_shard = None
     last_submitted_round = -1
 
-    model = CNN2D(n_classes=10).to(torch_device)
+    model = build_model(phase, n_classes).to(torch_device)
 
     print("Connexion au serveur FedAvg, en attente de rounds...")
     while True:

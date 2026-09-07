@@ -23,12 +23,38 @@ import time
 import numpy as np
 from flask import Flask, jsonify, request
 
-from jobs.progressive.models_pytorch import CNN2D, params_to_vector, vector_to_params
-from jobs.progressive.data_providers import CIFAR10Provider
+from jobs.progressive.models_pytorch import (
+    CNN2D, CNN3D, CNN3DAttention, params_to_vector, vector_to_params,
+)
+from jobs.progressive.data_providers import CIFAR10Provider, ModelNet40Provider
 from framework.compression import encode_vector, decode_vector, raw_size_bytes, compression_ratio
 
 app = Flask(__name__)
 lock = threading.Lock()
+
+PHASES = {
+    1: {"job": "Phase1-CIFAR10-CNN2D", "n_classes": 10, "default_batch": 64},
+    2: {"job": "Phase2-ModelNet40-CNN3D", "n_classes": 40, "default_batch": 16},
+    3: {"job": "Phase3-ModelNet40-CNN3D-Attention", "n_classes": 40, "default_batch": 16},
+}
+
+
+def build_model(phase: int, n_classes: int):
+    if phase == 1:
+        return CNN2D(n_classes=n_classes)
+    if phase == 2:
+        return CNN3D(n_classes=n_classes, in_channels=1)
+    if phase == 3:
+        return CNN3DAttention(n_classes=n_classes, in_channels=1)
+    raise ValueError(f"Phase inconnue : {phase} (attendu : 1, 2 ou 3)")
+
+
+def build_provider(phase: int):
+    if phase == 1:
+        return CIFAR10Provider()
+    if phase in (2, 3):
+        return ModelNet40Provider()
+    raise ValueError(f"Phase inconnue : {phase} (attendu : 1, 2 ou 3)")
 
 
 def stable_shard_id(client_id: str, n_shards: int) -> int:
@@ -37,9 +63,13 @@ def stable_shard_id(client_id: str, n_shards: int) -> int:
 
 
 class FedAvgState:
-    def __init__(self, n_shards: int, max_rounds: int, local_epochs: int,
+    def __init__(self, phase: int, n_shards: int, max_rounds: int, local_epochs: int,
                  batch_size: int, lr: float, target_accuracy: float,
                  round_timeout: float):
+        info = PHASES[phase]
+        self.phase = phase
+        self.job = info["job"]
+        self.n_classes = info["n_classes"]
         self.n_shards = n_shards
         self.max_rounds = max_rounds
         self.local_epochs = local_epochs
@@ -48,13 +78,16 @@ class FedAvgState:
         self.target_accuracy = target_accuracy
         self.round_timeout = round_timeout
 
-        self.data = CIFAR10Provider()
-        self.model = CNN2D(n_classes=10)
+        self.data = build_provider(phase)
+        self.model = build_model(phase, self.n_classes)
         self.n_params = sum(p.numel() for p in self.model.parameters())
         self.theta = params_to_vector(self.model)
 
         self.round_id = 0
         self.round_start = time.time()
+        self.first_submission_time = None   # le compte a rebours du timeout ne
+                                             # demarre qu'a la 1ere soumission du
+                                             # round, pas au demarrage serveur
         self.submissions = {}          # client_id -> (delta_vec, n_samples)
         self.assigned_shards = {}      # client_id -> shard_id
         self.finished = False
@@ -71,13 +104,15 @@ class FedAvgState:
 
     def maybe_aggregate(self):
         """Agrege si tous les shards ont soumis, ou si le timeout du round est depasse
-        avec au moins une soumission. Doit etre appele avec le lock deja pris."""
+        (decompte a partir de la 1ere soumission recue) avec au moins une soumission.
+        Doit etre appele avec le lock deja pris."""
         if self.finished:
             return
         n_sub = len(self.submissions)
-        timed_out = (time.time() - self.round_start) > self.round_timeout
         if n_sub == 0:
             return
+        timed_out = (self.first_submission_time is not None
+                     and (time.time() - self.first_submission_time) > self.round_timeout)
         if n_sub < self.n_shards and not timed_out:
             return
 
@@ -92,7 +127,7 @@ class FedAvgState:
         vector_to_params(self.model, self.theta)
         import torch
         self.model.eval()
-        x, y = self.data.sample_eval(1000)
+        x, y = self.data.sample_eval()
         with torch.no_grad():
             xt = torch.from_numpy(x)
             pred = self.model(xt).argmax(dim=1).numpy()
@@ -108,10 +143,12 @@ class FedAvgState:
             "accuracy": acc,
             "participants": n_sub,
             "elapsed": elapsed,
+            "complete": not timed_out,
         })
 
         self.round_id += 1
         self.submissions = {}
+        self.first_submission_time = None
         self.round_start = time.time()
 
         if self.round_id >= self.max_rounds or acc >= self.target_accuracy:
@@ -126,6 +163,9 @@ state: FedAvgState | None = None
 @app.route("/fedavg/config")
 def fedavg_config():
     return jsonify({
+        "phase": state.phase,
+        "job": state.job,
+        "n_classes": state.n_classes,
         "n_shards": state.n_shards,
         "n_params": state.n_params,
         "local_epochs": state.local_epochs,
@@ -169,6 +209,8 @@ def fedavg_submit():
         if round_id != state.round_id:
             # Soumission perimee (le round a deja avance) -- on l'ignore proprement
             return jsonify({"status": "stale", "current_round": state.round_id})
+        if state.first_submission_time is None:
+            state.first_submission_time = time.time()
         state.submissions[client_id] = (delta, n_samples)
         state.bytes_uploaded_total += nbytes
         print(f"[FedAvg] reçu round {round_id} de {client_id} "
@@ -180,52 +222,208 @@ def fedavg_submit():
 @app.route("/fedavg/status")
 def fedavg_status():
     with lock:
+        raw_equiv = raw_size_bytes(state.n_params) * 2 * max(1, state.round_id) * state.n_shards
+        comp_ratio = (raw_equiv / state.bytes_uploaded_total) if state.bytes_uploaded_total else 0.0
         return jsonify({
+            "phase": state.phase,
+            "job": state.job,
+            "n_params": state.n_params,
             "round": state.round_id,
             "max_rounds": state.max_rounds,
             "finished": state.finished,
             "history": state.history,
             "n_shards": state.n_shards,
             "submitted_this_round": len(state.submissions),
+            "target_accuracy": state.target_accuracy,
             "elapsed": time.time() - state.start_time,
             "bytes_uploaded_total": state.bytes_uploaded_total,
             "bytes_downloaded_total": state.bytes_downloaded_total,
-            "raw_equivalent_bytes": raw_size_bytes(state.n_params) * 2
-                                    * max(1, state.round_id) * state.n_shards,
+            "raw_equivalent_bytes": raw_equiv,
+            "compression_ratio": comp_ratio,
         })
+
+
+@app.route("/fedavg/export.json")
+def fedavg_export_json():
+    with lock:
+        return jsonify({
+            "phase": state.phase,
+            "job": state.job,
+            "n_params": state.n_params,
+            "n_shards": state.n_shards,
+            "local_epochs": state.local_epochs,
+            "batch_size": state.batch_size,
+            "max_rounds": state.max_rounds,
+            "target_accuracy": state.target_accuracy,
+            "finished": state.finished,
+            "elapsed_total": time.time() - state.start_time,
+            "bytes_uploaded_total": state.bytes_uploaded_total,
+            "bytes_downloaded_total": state.bytes_downloaded_total,
+            "history": state.history,
+        })
+
+
+@app.route("/fedavg/export.csv")
+def fedavg_export_csv():
+    from flask import Response
+    lines = ["round,accuracy,participants,n_shards,complete,elapsed_s"]
+    with lock:
+        for h in state.history:
+            lines.append(f"{h['round']},{h['accuracy']:.6f},{h['participants']},"
+                          f"{state.n_shards},{h.get('complete', True)},{h['elapsed']:.1f}")
+    return Response("\n".join(lines), mimetype="text/csv",
+                     headers={"Content-Disposition": "attachment; filename=fedavg_metrics.csv"})
+
+
+DASHBOARD_HTML = """
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Tableau de bord FedAvg</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+  body { background:#0b0f14; color:#e6edf3; font-family: ui-monospace, monospace; margin:0; padding:24px; }
+  h1 { font-size:20px; letter-spacing:1px; }
+  .sub { color:#8b949e; margin-bottom:16px; }
+  .badge { display:inline-block; padding:4px 12px; border-radius:16px; border:1px solid #2ea043;
+           color:#2ea043; font-size:13px; margin-right:8px; }
+  .badge.wait { border-color:#d29922; color:#d29922; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px; margin:20px 0; }
+  .card { background:#161b22; border:1px solid #30363d; border-radius:10px; padding:14px 16px; }
+  .card .label { color:#8b949e; font-size:11px; text-transform:uppercase; letter-spacing:1px; }
+  .card .value { font-size:26px; margin-top:6px; }
+  .btns a { color:#58a6ff; text-decoration:none; border:1px solid #30363d; padding:6px 14px;
+            border-radius:6px; margin-right:8px; font-size:13px; }
+  canvas { background:#161b22; border-radius:10px; padding:10px; margin-top:10px; }
+</style>
+</head>
+<body>
+<h1 id="job">Chargement...</h1>
+<div class="sub" id="sub"></div>
+<div id="badges"></div>
+<div class="btns" style="margin-top:12px;">
+  <a href="/fedavg/export.json">Exporter JSON</a>
+  <a href="/fedavg/export.csv">Exporter CSV</a>
+</div>
+<div class="grid" id="cards"></div>
+<canvas id="chart" height="90"></canvas>
+
+<script>
+let chart = null;
+
+function card(label, value) {
+  return `<div class="card"><div class="label">${label}</div><div class="value">${value}</div></div>`;
+}
+
+async function refresh() {
+  const r = await fetch('/fedavg/status');
+  const s = await r.json();
+
+  document.getElementById('job').textContent = s.job + '  (' + s.n_params.toLocaleString() + ' parametres)';
+  document.getElementById('sub').textContent =
+    'Round ' + s.round + ' / ' + s.max_rounds + '  --  ' + s.n_shards + ' shard(s)';
+
+  const badges = s.finished
+    ? '<span class="badge">TERMINE</span>'
+    : '<span class="badge wait">en cours -- ' + s.submitted_this_round + '/' + s.n_shards + ' pour ce round</span>';
+  document.getElementById('badges').innerHTML = badges;
+
+  const lastAcc = s.history.length ? (s.history[s.history.length-1].accuracy*100).toFixed(2) : '--';
+  const elapsedMin = (s.elapsed/60).toFixed(1);
+  const ratio = s.compression_ratio ? s.compression_ratio.toFixed(1) : '--';
+  const upMB = (s.bytes_uploaded_total/1e6).toFixed(1);
+  const downMB = (s.bytes_downloaded_total/1e6).toFixed(1);
+
+  document.getElementById('cards').innerHTML =
+      card('Precision actuelle', lastAcc + '%')
+    + card('Cible', (s.target_accuracy*100).toFixed(0) + '%')
+    + card('Temps ecoule', elapsedMin + ' min')
+    + card('Rounds', s.round + ' / ' + s.max_rounds)
+    + card('Envoye (deltas)', upMB + ' Mo')
+    + card('Recu (poids)', downMB + ' Mo')
+    + card('Facteur de reduction', '&times;' + ratio);
+
+  const labels = s.history.map(h => 'R' + h.round);
+  const accData = s.history.map(h => (h.accuracy*100).toFixed(2));
+  const partData = s.history.map(h => h.participants);
+
+  if (!chart) {
+    const ctx = document.getElementById('chart').getContext('2d');
+    chart = new Chart(ctx, {
+      type: 'line',
+      data: { labels: labels, datasets: [
+        { label: 'Precision (%)', data: accData, borderColor:'#2ea043', yAxisID:'y', tension:0.2 },
+        { label: 'Volontaires participants', data: partData, borderColor:'#58a6ff', yAxisID:'y1', tension:0.2 },
+      ]},
+      options: {
+        scales: {
+          y: { position:'left', ticks:{color:'#8b949e'}, grid:{color:'#30363d'} },
+          y1:{ position:'right', ticks:{color:'#8b949e'}, grid:{drawOnChartArea:false} },
+          x: { ticks:{color:'#8b949e'}, grid:{color:'#30363d'} },
+        },
+        plugins: { legend:{ labels:{ color:'#e6edf3' } } },
+      }
+    });
+  } else {
+    chart.data.labels = labels;
+    chart.data.datasets[0].data = accData;
+    chart.data.datasets[1].data = partData;
+    chart.update();
+  }
+
+  if (!s.finished) setTimeout(refresh, 3000);
+}
+refresh();
+</script>
+</body>
+</html>
+"""
+
+
+@app.route("/")
+def dashboard():
+    return DASHBOARD_HTML
 
 
 def main():
     global state
     ap = argparse.ArgumentParser()
-    ap.add_argument("--phase", type=int, default=1, help="Seule la phase 1 (CIFAR-10) est geree par ce prototype.")
+    ap.add_argument("--phase", type=int, default=1, choices=[1, 2, 3],
+                     help="1=CIFAR-10 CNN2D, 2=ModelNet40 CNN3D, 3=ModelNet40 CNN3D+Attention")
     ap.add_argument("--rounds", type=int, default=10)
     ap.add_argument("--local-epochs", type=int, default=1)
-    ap.add_argument("--batch-size", type=int, default=64)
+    ap.add_argument("--batch-size", type=int, default=None,
+                     help="Par defaut : 64 en phase 1, 16 en phase 2/3.")
     ap.add_argument("--shards", type=int, default=3, help="Nombre de volontaires attendus (partitions du dataset).")
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--target-accuracy", type=float, default=0.75)
     ap.add_argument("--round-timeout", type=float, default=600.0,
-                     help="Secondes avant d'agreger meme si tous les volontaires n'ont pas soumis.")
+                     help="Secondes avant d'agreger meme si tous les volontaires n'ont pas soumis "
+                          "(decompte a partir de la 1ere soumission du round).")
     ap.add_argument("--host", type=str, default="0.0.0.0")
     ap.add_argument("--port", type=int, default=5001)
     args = ap.parse_args()
 
+    batch_size = args.batch_size or PHASES[args.phase]["default_batch"]
+
     state = FedAvgState(
-        n_shards=args.shards, max_rounds=args.rounds, local_epochs=args.local_epochs,
-        batch_size=args.batch_size, lr=args.lr, target_accuracy=args.target_accuracy,
-        round_timeout=args.round_timeout,
+        phase=args.phase, n_shards=args.shards, max_rounds=args.rounds,
+        local_epochs=args.local_epochs, batch_size=batch_size, lr=args.lr,
+        target_accuracy=args.target_accuracy, round_timeout=args.round_timeout,
     )
 
     print("================================================================")
     print("  SERVEUR FEDAVG -- rounds d'entrainement local")
     print("================================================================")
-    print(f"  Modele        : CNN2D CIFAR-10 ({state.n_params:,} params)")
+    print(f"  Phase         : {args.phase} -- {state.job}")
+    print(f"  Modele        : {state.n_params:,} parametres, {state.n_classes} classes")
     print(f"  Rounds prevus : {args.rounds}")
     print(f"  Shards        : {args.shards} (= nombre de volontaires attendus)")
-    print(f"  Epoques locales/round : {args.local_epochs}")
+    print(f"  Epoques locales/round : {args.local_epochs}  |  batch={batch_size}")
     print(f"  Port          : {args.port}")
     print("================================================================")
+    print(f"  Tableau de bord     : http://<IP>:{args.port}/")
     print(f"  Commande volontaire : python scripts/run_volunteer_fedavg.py "
           f"--server http://<IP>:{args.port} --device <nom>")
     print("================================================================")
