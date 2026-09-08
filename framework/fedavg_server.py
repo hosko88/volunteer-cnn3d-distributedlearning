@@ -38,6 +38,11 @@ PHASES = {
     3: {"job": "Phase3-ModelNet40-CNN3D-Attention", "n_classes": 40, "default_batch": 16},
 }
 
+# Reference de temps sequentiel mesuree reellement (sanity_check_cnn2d_local.py,
+# CPU, sans distribution) : 1 epoque complete sur les 50 000 images CIFAR-10.
+# Aucune reference centralisee equivalente n'a ete mesuree pour ModelNet40 (phase 2/3)
+# a ce stade -- le speedup n'est donc calcule que pour la phase 1, honnetement.
+
 
 def build_model(phase: int, n_classes: int):
     if phase == 1:
@@ -63,9 +68,14 @@ def stable_shard_id(client_id: str, n_shards: int) -> int:
 
 
 class FedAvgState:
+    # Reference mesuree sur ce projet (sanity_check_cnn2d_local.py) :
+    # 1 epoque complete (50000 images, CNN2D, CPU) = 274.4s => 0.005488 s/image.
+    # Sert de base "sequentielle" pour calculer le speedup en phase 1.
+    REF_SECONDS_PER_IMAGE = {1: 274.4 / 50000}
+
     def __init__(self, phase: int, n_shards: int, max_rounds: int, local_epochs: int,
                  batch_size: int, lr: float, target_accuracy: float,
-                 round_timeout: float):
+                 round_timeout: float, ref_seconds_per_image: float | None = None):
         info = PHASES[phase]
         self.phase = phase
         self.job = info["job"]
@@ -77,6 +87,9 @@ class FedAvgState:
         self.lr = lr
         self.target_accuracy = target_accuracy
         self.round_timeout = round_timeout
+        # Reference explicite (--ref-seconds-per-image) sinon celle connue pour la
+        # phase, sinon None (speedup non calculable, affiche "--" plutot qu'invente)
+        self.ref_seconds_per_image = ref_seconds_per_image or self.REF_SECONDS_PER_IMAGE.get(phase)
 
         self.data = build_provider(phase)
         self.model = build_model(phase, self.n_classes)
@@ -96,6 +109,13 @@ class FedAvgState:
 
         self.bytes_uploaded_total = 0
         self.bytes_downloaded_total = 0
+        self.samples_processed_total = 0
+        self.client_stats = {}   # client_id -> {rounds, last_local_time, last_n_samples,
+                                  #               shard_id, total_local_time, total_samples}
+
+        self.stale_submissions = 0     # soumissions arrivees apres agregation du round -> gaspillees
+        self.cum_sequential_seconds = 0.0  # temps "sequentiel equivalent" cumule
+        self.cum_wall_seconds = 0.0        # temps reel cumule (calcul utile uniquement, hors attente)
 
     def assign_shard(self, client_id: str) -> int:
         if client_id not in self.assigned_shards:
@@ -133,10 +153,31 @@ class FedAvgState:
             pred = self.model(xt).argmax(dim=1).numpy()
         acc = float((pred == y).mean())
 
+        # --- Duree reelle de ce round : depuis la 1ere soumission (comme le timeout),
+        #     pas depuis le demarrage du round, pour ne pas compter le temps d'attente
+        #     avant qu'un volontaire ne se manifeste. ---
+        round_wall_seconds = (time.time() - self.first_submission_time) if self.first_submission_time else 0.0
+
+        # --- Speedup / efficacite : comparaison au temps qu'aurait pris le meme
+        #     volume de travail en sequentiel, sur UNE seule machine. ---
+        images_processed = total_samples * self.local_epochs
+        if self.ref_seconds_per_image and round_wall_seconds > 0:
+            sequential_seconds = images_processed * self.ref_seconds_per_image
+            speedup = sequential_seconds / round_wall_seconds
+            efficiency = speedup / max(1, n_sub)
+            self.cum_sequential_seconds += sequential_seconds
+            self.cum_wall_seconds += round_wall_seconds
+        else:
+            sequential_seconds = None
+            speedup = None
+            efficiency = None
+
         elapsed = time.time() - self.start_time
+        speedup_str = f"x{speedup:.2f}" if speedup is not None else "--"
         print(f"[FedAvg] round {self.round_id} termine "
               f"({n_sub}/{self.n_shards} volontaires, {'TIMEOUT' if timed_out else 'complet'}) "
-              f"-> precision={acc*100:.2f}%  elapsed={elapsed:.0f}s")
+              f"-> precision={acc*100:.2f}%  duree_round={round_wall_seconds:.0f}s  "
+              f"speedup={speedup_str}  elapsed_total={elapsed:.0f}s")
 
         self.history.append({
             "round": self.round_id,
@@ -144,6 +185,10 @@ class FedAvgState:
             "participants": n_sub,
             "elapsed": elapsed,
             "complete": not timed_out,
+            "round_duration_s": round_wall_seconds,
+            "images_processed": images_processed,
+            "speedup": speedup,
+            "efficiency": efficiency,
         })
 
         self.round_id += 1
@@ -200,6 +245,7 @@ def fedavg_submit():
     client_id = d["client_id"]
     round_id = int(d["round_id"])
     n_samples = int(d["n_samples"])
+    local_time = float(d.get("local_time", 0.0))
     delta = decode_vector(d["delta"])
     nbytes = len(d["delta"])  # approx (base64), suffisant pour les metriques
 
@@ -207,14 +253,31 @@ def fedavg_submit():
         if state.finished:
             return jsonify({"status": "finished"})
         if round_id != state.round_id:
-            # Soumission perimee (le round a deja avance) -- on l'ignore proprement
+            # Soumission perimee (le round a deja avance) -- on l'ignore proprement,
+            # mais on la compte : c'est du calcul reellement gaspille.
+            state.stale_submissions += 1
+            print(f"[FedAvg] soumission perimee de {client_id} pour le round {round_id} "
+                  f"(le serveur en est au round {state.round_id}) -- ignoree")
             return jsonify({"status": "stale", "current_round": state.round_id})
         if state.first_submission_time is None:
             state.first_submission_time = time.time()
         state.submissions[client_id] = (delta, n_samples)
+
+        cs = state.client_stats.setdefault(client_id, {
+            "rounds": 0, "last_local_time": None, "last_n_samples": None,
+            "shard_id": state.assigned_shards.get(client_id),
+            "total_local_time": 0.0, "total_samples": 0,
+        })
+        cs["rounds"] += 1
+        cs["last_local_time"] = local_time
+        cs["last_n_samples"] = n_samples
+        cs["total_local_time"] += local_time
+        cs["total_samples"] += n_samples
+
         state.bytes_uploaded_total += nbytes
         print(f"[FedAvg] reçu round {round_id} de {client_id} "
-              f"({len(state.submissions)}/{state.n_shards} pour ce round)")
+              f"({len(state.submissions)}/{state.n_shards} pour ce round, "
+              f"local_time={local_time:.0f}s pour {n_samples} images)")
         state.maybe_aggregate()
         return jsonify({"status": "ok"})
 
@@ -224,6 +287,9 @@ def fedavg_status():
     with lock:
         raw_equiv = raw_size_bytes(state.n_params) * 2 * max(1, state.round_id) * state.n_shards
         comp_ratio = (raw_equiv / state.bytes_uploaded_total) if state.bytes_uploaded_total else 0.0
+        cum_speedup = (state.cum_sequential_seconds / state.cum_wall_seconds
+                       if state.cum_wall_seconds > 0 else None)
+        cum_efficiency = (cum_speedup / state.n_shards) if cum_speedup is not None else None
         return jsonify({
             "phase": state.phase,
             "job": state.job,
@@ -240,12 +306,19 @@ def fedavg_status():
             "bytes_downloaded_total": state.bytes_downloaded_total,
             "raw_equivalent_bytes": raw_equiv,
             "compression_ratio": comp_ratio,
+            "stale_submissions": state.stale_submissions,
+            "ref_seconds_per_image": state.ref_seconds_per_image,
+            "cum_speedup": cum_speedup,
+            "cum_efficiency": cum_efficiency,
+            "client_stats": state.client_stats,
         })
 
 
 @app.route("/fedavg/export.json")
 def fedavg_export_json():
     with lock:
+        cum_speedup = (state.cum_sequential_seconds / state.cum_wall_seconds
+                       if state.cum_wall_seconds > 0 else None)
         return jsonify({
             "phase": state.phase,
             "job": state.job,
@@ -259,6 +332,11 @@ def fedavg_export_json():
             "elapsed_total": time.time() - state.start_time,
             "bytes_uploaded_total": state.bytes_uploaded_total,
             "bytes_downloaded_total": state.bytes_downloaded_total,
+            "stale_submissions": state.stale_submissions,
+            "ref_seconds_per_image": state.ref_seconds_per_image,
+            "cum_speedup": cum_speedup,
+            "cum_efficiency": (cum_speedup / state.n_shards) if cum_speedup is not None else None,
+            "client_stats": state.client_stats,
             "history": state.history,
         })
 
@@ -266,11 +344,16 @@ def fedavg_export_json():
 @app.route("/fedavg/export.csv")
 def fedavg_export_csv():
     from flask import Response
-    lines = ["round,accuracy,participants,n_shards,complete,elapsed_s"]
+    lines = ["round,accuracy,participants,n_shards,complete,round_duration_s,"
+             "images_processed,speedup,efficiency,elapsed_total_s"]
     with lock:
         for h in state.history:
+            sp = f"{h['speedup']:.3f}" if h.get('speedup') is not None else ""
+            ef = f"{h['efficiency']:.3f}" if h.get('efficiency') is not None else ""
             lines.append(f"{h['round']},{h['accuracy']:.6f},{h['participants']},"
-                          f"{state.n_shards},{h.get('complete', True)},{h['elapsed']:.1f}")
+                          f"{state.n_shards},{h.get('complete', True)},"
+                          f"{h.get('round_duration_s', 0):.1f},{h.get('images_processed', 0)},"
+                          f"{sp},{ef},{h['elapsed']:.1f}")
     return Response("\n".join(lines), mimetype="text/csv",
                      headers={"Content-Disposition": "attachment; filename=fedavg_metrics.csv"})
 
@@ -296,6 +379,9 @@ DASHBOARD_HTML = """
   .btns a { color:#58a6ff; text-decoration:none; border:1px solid #30363d; padding:6px 14px;
             border-radius:6px; margin-right:8px; font-size:13px; }
   canvas { background:#161b22; border-radius:10px; padding:10px; margin-top:10px; }
+  table { width:100%; border-collapse:collapse; margin-top:20px; background:#161b22; border-radius:10px; overflow:hidden; }
+  th, td { text-align:left; padding:10px 14px; border-bottom:1px solid #30363d; font-size:13px; }
+  th { color:#8b949e; text-transform:uppercase; font-size:11px; letter-spacing:1px; }
 </style>
 </head>
 <body>
@@ -308,6 +394,7 @@ DASHBOARD_HTML = """
 </div>
 <div class="grid" id="cards"></div>
 <canvas id="chart" height="90"></canvas>
+<table><tbody id="vol-table"></tbody></table>
 
 <script>
 let chart = null;
@@ -334,15 +421,29 @@ async function refresh() {
   const ratio = s.compression_ratio ? s.compression_ratio.toFixed(1) : '--';
   const upMB = (s.bytes_uploaded_total/1e6).toFixed(1);
   const downMB = (s.bytes_downloaded_total/1e6).toFixed(1);
+  const speedup = s.cum_speedup !== null ? ('&times;' + s.cum_speedup.toFixed(2)) : 'N/A';
+  const eff = s.cum_efficiency !== null ? (s.cum_efficiency*100).toFixed(0) + '%' : 'N/A';
 
   document.getElementById('cards').innerHTML =
       card('Precision actuelle', lastAcc + '%')
     + card('Cible', (s.target_accuracy*100).toFixed(0) + '%')
     + card('Temps ecoule', elapsedMin + ' min')
     + card('Rounds', s.round + ' / ' + s.max_rounds)
+    + card('Speedup cumule', speedup)
+    + card('Efficacite', eff)
     + card('Envoye (deltas)', upMB + ' Mo')
     + card('Recu (poids)', downMB + ' Mo')
-    + card('Facteur de reduction', '&times;' + ratio);
+    + card('Facteur de reduction', '&times;' + ratio)
+    + card('Soumissions perimees', s.stale_submissions);
+
+  const rows = Object.entries(s.client_stats || {}).map(([cid, cs]) => {
+    const avgSpeed = cs.total_local_time > 0 ? (cs.total_samples/cs.total_local_time).toFixed(0) : '--';
+    return `<tr><td>${cid}</td><td>shard ${cs.shard_id}</td><td>${cs.rounds}</td>`
+         + `<td>${cs.last_local_time !== null ? cs.last_local_time.toFixed(0)+'s' : '--'}</td>`
+         + `<td>${avgSpeed} img/s</td></tr>`;
+  }).join('');
+  document.getElementById('vol-table').innerHTML =
+    '<tr><th>Volontaire</th><th>Shard</th><th>Rounds soumis</th><th>Dernier temps local</th><th>Debit moyen</th></tr>' + rows;
 
   const labels = s.history.map(h => 'R' + h.round);
   const accData = s.history.map(h => (h.accuracy*100).toFixed(2));

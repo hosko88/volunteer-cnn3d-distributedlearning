@@ -135,6 +135,7 @@ def main():
             "round_id": round_id,
             "n_samples": len(x_shard),
             "delta": payload,
+            "local_time": dt,
         }, timeout=30).json()
 
         print(f"Round {round_id} termine en {dt:.1f}s "
