@@ -267,7 +267,7 @@ class AttentionCNN3D:
         })
         return grad, loss, correct, {"probs": probs}
 
-    def predict(self, params_flat: np.ndarray, x: np.ndarray) -> int:
+    def predict(self, params_flat: np.ndarray, x: np.ndarray) -> np.ndarray:
         p = self.unpack(params_flat)
         conv1, _ = conv3d_forward(x, p["conv1_w"], p["conv1_b"])
         relu1 = np.maximum(conv1, 0)
@@ -285,4 +285,7 @@ class AttentionCNN3D:
         pooled = pooled_flat.reshape(-1)
         hidden = np.maximum(pooled @ p["fc1_w"] + p["fc1_b"], 0)
         logits = hidden @ p["fc2_w"] + p["fc2_b"]
-        return int(np.argmax(logits))
+        logits = logits - logits.max()
+        exp = np.exp(logits)
+        probs = exp / (exp.sum() + 1e-12)
+        return probs.astype(np.float32)
