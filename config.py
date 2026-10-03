@@ -38,7 +38,7 @@ class TransportConfig:
 
 @dataclass
 class TrainConfig:
-    n_tasks_per_epoch: int = 256
+    n_tasks_per_epoch: int = 128
     batch_size: int = 32
     local_steps: int = 1            # accumulation locale (1 = classique)
     max_epochs: int = 250
